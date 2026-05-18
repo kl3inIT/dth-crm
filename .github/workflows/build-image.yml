@@ -87,11 +87,14 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
 
-      - name: Build and push (Dockerfile.jar uses the JAR built above — decouples Gradle from Docker layers)
+      - name: Stage JAR for Dockerfile context
+        run: cp build/libs/dth-crm.jar dth-crm.jar
+
+      - name: Build and push (Dockerfile reads the JAR staged above)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.jar
+          file: ./Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
