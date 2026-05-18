@@ -20,7 +20,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # GHCR rejects uppercase in image paths — normalise from github.repository
+  # (which preserves the original repo casing, e.g. kl3inIT/dth-crm).
+  IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}
 
 jobs:
   build-and-push:
@@ -42,9 +44,20 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build bootJar (vaadin productionMode)
+        # Internal Nexus (com.vn:ai-agent-starter) is sometimes flaky → retry up to 5x
+        # with exponential backoff. After the first success Gradle cache is warm so
+        # subsequent steps are fast.
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon bootJar -Pvaadin.productionMode -x test
+          set +e
+          for attempt in 1 2 3 4 5; do
+            ./gradlew --no-daemon bootJar -Pvaadin.productionMode -x test \
+              --refresh-dependencies && exit 0
+            echo "::warning::bootJar attempt $attempt failed — retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          echo "::error::bootJar failed after 5 attempts — Nexus likely down"
+          exit 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -56,11 +69,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase image name for GHCR
+        id: img
+        run: echo "name=${IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+
       - name: Extract metadata (tags + labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
