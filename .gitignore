@@ -31,10 +31,13 @@ webpack.generated.js
 .DS_Store
 Thumbs.db
 
-# local secrets
+# local secrets — match every .env variant
 .env
-.env.properties
-.env.local
+.env.*
+
+# server compose has secrets baked in — never commit
+docker-compose.server.yml
+deploy/
 
 # Jmix Studio IDE metadata
 jmix-studio.xml
