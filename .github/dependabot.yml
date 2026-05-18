@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["deps", "gradle"]
+    ignore:
+      # don't auto-bump Jmix BOM — coordinate manually with add-on releases
+      - dependency-name: "io.jmix.*"
+      - dependency-name: "com.vn:ai-agent*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["deps", "ci"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["deps", "docker"]

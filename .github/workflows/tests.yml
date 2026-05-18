@@ -1,0 +1,92 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build + Unit/Integration Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres-main:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dthcrm_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dthcrm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres-agentstore:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: agentstore_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentstore_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Run tests
+        env:
+          MAIN_DATASOURCE_URL: jdbc:postgresql://localhost:55432/dthcrm_test
+          AGENTSTORE_DATASOURCE_URL: jdbc:postgresql://localhost:55433/agentstore_test
+          MAIN_DATASOURCE_PASSWORD: postgres
+          AGENTSTORE_DATASOURCE_PASSWORD: postgres
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY || 'placeholder-no-ai-tests' }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon test
+
+      - name: Publish JUnit report
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: '**/build/test-results/test/TEST-*.xml'
+          require_tests: false
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_id }}
+          path: |
+            build/reports/tests/
+            build/test-results/
+          retention-days: 7

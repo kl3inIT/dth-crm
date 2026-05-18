@@ -1,0 +1,107 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (e.g. v1.0.0, sha-abc123, latest)'
+        required: true
+        default: 'latest'
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}
+  REMOTE_DIR: /opt/dth-crm
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.image_tag }} → ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout (need docker-compose.prod.yml)
+        uses: actions/checkout@v4
+
+      - name: Copy docker-compose.prod.yml to host
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          source: docker-compose.prod.yml
+          target: ${{ env.REMOTE_DIR }}
+          overwrite: true
+
+      - name: Deploy on Ubuntu host (pull + rolling restart)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: IMAGE,REMOTE_DIR
+          script: |
+            set -euo pipefail
+            cd "$REMOTE_DIR"
+
+            # Write .env (idempotent — secrets come from GitHub, never the repo)
+            umask 077
+            cat > .env <<EOF
+            IMAGE_TAG=$IMAGE
+            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            OPENROUTER_MODEL=${{ vars.OPENROUTER_MODEL || 'qwen/qwen3.6-35b-a3b' }}
+            APP_PORT=${{ vars.APP_PORT || 8080 }}
+            EOF
+
+            # Authenticate to GHCR (if image is private; PAT or ${{ secrets.GITHUB_TOKEN }} is repo-scoped)
+            echo "${{ secrets.GHCR_READ_TOKEN }}" | docker login ghcr.io -u "${{ secrets.GHCR_READ_USER || github.actor }}" --password-stdin
+
+            # Pull + recreate app only; DBs keep running
+            docker compose -f docker-compose.prod.yml --env-file .env pull app
+            docker compose -f docker-compose.prod.yml --env-file .env up -d --no-deps --remove-orphans app
+
+            # Prune previous untagged images (keep last 2)
+            docker image prune -af --filter "until=168h"
+
+            # Wait for HEALTHCHECK to flip to healthy (image's own probe)
+            echo "Waiting for app to become healthy..."
+            for i in $(seq 1 30); do
+              status=$(docker inspect dthcrm-app --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "✅ healthy after ${i} probes"
+                exit 0
+              fi
+              if [ "$status" = "unhealthy" ]; then
+                echo "❌ container reported unhealthy — dumping logs"
+                docker logs --tail 200 dthcrm-app
+                exit 1
+              fi
+              sleep 10
+            done
+            echo "⏱️  timed out waiting for healthy"
+            docker logs --tail 200 dthcrm-app
+            exit 1
+
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "### Deployment ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** \`${{ inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ env.IMAGE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Host:** \`${{ secrets.DEPLOY_HOST }}\`" >> $GITHUB_STEP_SUMMARY
