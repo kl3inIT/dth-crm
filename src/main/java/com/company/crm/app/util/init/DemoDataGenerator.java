@@ -88,9 +88,10 @@ public class DemoDataGenerator implements Ordered {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReadyEvent(ApplicationReadyEvent event) {
-        if (springProfiles.isLocalProfile()) {
-            initDemoDataIfNeeded();
-        }
+        // Gated only by `crm.generateDemoData` (checked inside shouldInitializeDemoData)
+        // — both local and prod profiles can seed demo data. The generator is idempotent:
+        // it skips if the clients table is non-empty.
+        initDemoDataIfNeeded();
     }
 
     public void initDemoDataIfNeeded() {
