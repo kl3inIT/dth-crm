@@ -1,8 +1,9 @@
 # build artefacts + node_modules
 # (Dockerfile.jar needs build/libs/dth-crm.jar — unblock that specific path)
+# build/ excluded — the COPY in Dockerfile.jar reads dth-crm.jar from the
+# root of the context, not from build/libs/, so we don't need to whitelist it.
 build
 **/build
-!build/libs/dth-crm.jar
 node_modules
 **/node_modules
 src/main/frontend/generated

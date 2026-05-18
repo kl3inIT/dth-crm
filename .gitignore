@@ -39,6 +39,9 @@ Thumbs.db
 docker-compose.server.yml
 deploy/
 
+# root jar for the server-side image build — not source-of-truth
+/dth-crm.jar
+
 # Jmix Studio IDE metadata
 jmix-studio.xml
 
